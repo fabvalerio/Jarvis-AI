@@ -38,6 +38,18 @@ python-dotenv==1.0.1
 # Comunicação (opcional)
 python-telegram-bot==22.6
 
+# WhatsApp Bridge via Evolution API (open source / self-hosted)
+# Servidor: docker run -d -p 8080:8080 atendai/evolution-api:latest
+# requests já listado acima (usado para chamadas REST à Evolution API)
+
+# Geração de Imagens AI
+# stability-sdk>=0.8.1   # Stability AI (opcional, tem plano gratuito)
+# Pollinations AI: sem SDK, usa requests (já instalado)
+# Pillow já listado acima (backend de templates offline)
+
+# Agendamento e Produtividade
+schedule>=1.2.0
+
 # Processamento Numérico
 numpy==2.4.2
 
