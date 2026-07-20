@@ -50,6 +50,13 @@ python-telegram-bot==22.6
 # Agendamento e Produtividade
 schedule>=1.2.0
 
+# Painel Web Multi-AI (localhost:5000)
+flask>=3.0.0
+
+# Multi-AI Router (instale os SDKs dos provedores que usar)
+# anthropic>=0.40.0       # Claude (Anthropic)
+# openai>=1.50.0          # ChatGPT e OpenRouter (compatível OpenAI)
+
 # Processamento Numérico
 numpy==2.4.2
 
