@@ -228,12 +228,14 @@ class AIRouter:
     - Tenta provedores em ordem de prioridade (menor número = maior prioridade).
     - Se um falha por cota/rate-limit, marca como temporariamente suspenso e tenta o próximo.
     - Estado (habilitado/prioridade/erros) persiste em JSON local.
+    - force_active_id: quando definido, usa apenas esse provedor (sem fallback automático).
     """
 
     QUOTA_SUSPEND_MINUTES = 60  # suspende provedor por 1h após erro de cota
 
     def __init__(self):
         self.states: dict[str, ProviderState] = {}
+        self.force_active_id: Optional[str] = None  # None = modo automático
         self._load_state()
 
     # ------------------------------------------------------------------ #
@@ -254,10 +256,10 @@ class AIRouter:
         if STATE_FILE.exists():
             try:
                 raw = json.loads(STATE_FILE.read_text())
+                self.force_active_id = raw.pop("__force_active__", None)
                 self.states = {
                     k: ProviderState(**v) for k, v in raw.items()
                 }
-                # garante que novos provedores aparecem
                 for p in ALL_PROVIDERS:
                     if p.provider_id not in self.states:
                         self.states[p.provider_id] = ProviderState(
@@ -273,6 +275,8 @@ class AIRouter:
     def _save_state(self):
         try:
             data = {k: vars(v) for k, v in self.states.items()}
+            if self.force_active_id:
+                data["__force_active__"] = self.force_active_id
             STATE_FILE.write_text(json.dumps(data, indent=2))
         except Exception as e:
             logger.warning(f"Erro ao salvar estado: {e}")
@@ -298,6 +302,14 @@ class AIRouter:
                 self.states[pid].priority = i
         self._save_state()
 
+    def set_active_provider(self, provider_id: str):
+        """Fixa manualmente um provedor. Passa 'auto' para voltar ao modo automático."""
+        if provider_id == "auto":
+            self.force_active_id = None
+        else:
+            self.force_active_id = provider_id
+        self._save_state()
+
     def _is_suspended(self, state: ProviderState) -> bool:
         if not state.quota_reset_at:
             return False
@@ -316,8 +328,21 @@ class AIRouter:
     def chat(self, message: str, system: str = "") -> AIResponse:
         """
         Envia mensagem ao próximo provedor disponível.
-        Faz fallback automático em caso de erro de cota ou falha.
+        Se force_active_id estiver definido, usa apenas ele.
+        Caso contrário faz fallback automático por prioridade.
         """
+        if self.force_active_id:
+            forced_state = self.states.get(self.force_active_id)
+            forced_provider = PROVIDER_MAP.get(self.force_active_id)
+            if forced_state and forced_provider and forced_provider.is_configured():
+                t0 = time.time()
+                resp = forced_provider.chat(message, system)
+                forced_state.total_calls += 1
+                forced_state.last_used = datetime.now().isoformat()
+                self._save_state()
+                return resp
+            # Provedor fixado não disponível → cai para automático
+
         ordered = sorted(
             [s for s in self.states.values() if s.enabled],
             key=lambda s: s.priority,
@@ -371,8 +396,11 @@ class AIRouter:
 
     def get_status(self) -> list[dict]:
         result = []
+        auto_active = self._resolve_auto_active()
         for p in ALL_PROVIDERS:
             state = self.states.get(p.provider_id, ProviderState(provider_id=p.provider_id))
+            is_force = self.force_active_id == p.provider_id
+            is_active = is_force or (not self.force_active_id and p.provider_id == auto_active)
             result.append({
                 "id": p.provider_id,
                 "name": p.display_name,
@@ -385,10 +413,12 @@ class AIRouter:
                 "total_calls": state.total_calls,
                 "last_used": state.last_used,
                 "key_env": p.requires_key,
+                "is_active": is_active,
+                "is_force_active": is_force,
             })
         return sorted(result, key=lambda x: x["priority"])
 
-    def get_active_provider(self) -> Optional[str]:
+    def _resolve_auto_active(self) -> Optional[str]:
         for state in sorted(self.states.values(), key=lambda s: s.priority):
             if not state.enabled:
                 continue
@@ -398,6 +428,13 @@ class AIRouter:
             if p and p.is_configured():
                 return state.provider_id
         return None
+
+    def get_active_provider(self) -> Optional[str]:
+        if self.force_active_id:
+            p = PROVIDER_MAP.get(self.force_active_id)
+            if p and p.is_configured():
+                return self.force_active_id
+        return self._resolve_auto_active()
 
 
 # Instância global (importada pelo web panel e core)
